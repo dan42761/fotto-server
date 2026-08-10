@@ -30,7 +30,7 @@ async function eseguiLogin() {
     return cachedCookies;
 }
 
-// ENDPOINT 1: Ricerca e recupero lista risultati (Titoli e URL dei Dettagli)
+// ENDPOINT 1: Ricerca 
 app.get('/cercaTorrentIta', async (req, res) => {
     const searchQuery = req.query.q;
     if (!searchQuery) return res.status(400).json({ success: false, error: "Manca la query" });
@@ -38,11 +38,12 @@ app.get('/cercaTorrentIta', async (req, res) => {
     try {
         if (!cachedCookies) await eseguiLogin();
 
-        const trackerUrl = `https://ilcorsaroblu.org/index.php?page=torrents&search=${encodeURIComponent(searchQuery)}`;
+        const trackerUrl = `https://ilcorsaroblu.org/index.php?page=torrents&search=${encodeURIComponent(searchQuery)}&active=0`;
         let response = await axios.get(trackerUrl, {
             headers: { 'Cookie': cachedCookies, 'User-Agent': 'Mozilla/5.0' }
         });
 
+        // Se la sessione in memoria è scaduta, rifacciamo il login
         if (response.data.includes('name="pwd"')) {
             await eseguiLogin();
             response = await axios.get(trackerUrl, { headers: { 'Cookie': cachedCookies, 'User-Agent': 'Mozilla/5.0' } });
@@ -51,26 +52,32 @@ app.get('/cercaTorrentIta', async (req, res) => {
         const $ = cheerio.load(response.data);
         const risultati = [];
 
-        // Analizziamo la tabella mostrata nella tua prima immagine
-        $('table tr').each((index, element) => {
-            if (index === 0) return; // Salta l'intestazione della tabella
-
-            // La colonna 'Nome' è la seconda (indice 1). Cerchiamo il link <a> al suo interno.
-            const nameLink = $(element).find('td').eq(1).find('a').first();
-            const titolo = nameLink.text().trim();
-            let detailsUrl = nameLink.attr('href');
-
-            if (titolo && detailsUrl) {
-                // Assicuriamoci che l'URL sia assoluto
-                if (!detailsUrl.startsWith('http')) {
-                    detailsUrl = `https://ilcorsaroblu.org/${detailsUrl.replace(/^\//, '')}`;
-                }
+        // ⚠️ NUOVO ALGORITMO DI SCRAPING DINAMICO
+        // Scansioniamo ogni singola riga presente in tutte le tabelle
+        $('tr').each((index, element) => {
+            const tds = $(element).find('td');
+            
+            // Guardando la tua immagine, i veri file hanno 11 colonne. 
+            // Ignoriamo i separatori delle date e le barre di ricerca che hanno poche colonne.
+            if (tds.length >= 8) {
                 
-                // In base alla tua immagine, cerchiamo di estrarre i dati dalle altre colonne
-                const seeds = $(element).find('td').eq(6).text().trim() || '?'; // Colonna R (Seeds)
-                const size = $(element).find('td').eq(9).text().trim() || 'N/D'; // Colonna Dimensione
+                // La colonna 1 (la seconda da sinistra) è "Nome". Cerchiamo il link al suo interno.
+                const linkDettaglio = $(tds[1]).find('a').first();
+                let titolo = linkDettaglio.text().trim();
+                let detailsUrl = linkDettaglio.attr('href');
 
-                risultati.push({ titolo, detailsUrl, size, seeds });
+                if (titolo && detailsUrl) {
+                    // Rendiamo l'URL della pagina dettagli un link assoluto
+                    if (!detailsUrl.startsWith('http')) {
+                        detailsUrl = `https://ilcorsaroblu.org/${detailsUrl.replace(/^\//, '')}`;
+                    }
+
+                    // Preleviamo Seeds (Colonna 5 'D') e Size (Colonna 9 'Dimensione')
+                    const seeds = $(tds[5]).text().trim() || '?'; 
+                    const size = $(tds[9]).text().trim() || 'N/D';
+
+                    risultati.push({ titolo, detailsUrl, size, seeds });
+                }
             }
         });
 
@@ -82,7 +89,7 @@ app.get('/cercaTorrentIta', async (req, res) => {
     }
 });
 
-// ENDPOINT 2: Scraping della pagina di dettaglio (mostrata nella seconda immagine)
+// ENDPOINT 2: Scraping della pagina del magnet link
 app.get('/getMagnet', async (req, res) => {
     const detailsUrl = req.query.url;
     if (!detailsUrl) return res.status(400).json({ success: false, error: "Manca l'URL" });
@@ -95,7 +102,8 @@ app.get('/getMagnet', async (req, res) => {
         });
 
         const $ = cheerio.load(response.data);
-        // Cerca il link che inizia con magnet: (il bottone con la calamita)
+        
+        // Estrae direttamente l'URL dalla grossa calamita
         const magnet = $('a[href^="magnet:"]').attr('href');
 
         if (magnet) {
