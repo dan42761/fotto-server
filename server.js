@@ -6,47 +6,46 @@ const cors = require('cors');
 const app = express();
 app.use(cors());
 
-// Headers standard per simulare un browser reale ed evitare blocchi preliminari
+// URL base del sito (puoi modificarlo qui se usi un mirror differente)
+const BASE_URL = 'https://1337x.to';
+
 const browserHeaders = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
     'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7'
 };
 
-// ENDPOINT 1: Ricerca su 1337x (forzata in italiano aggiungendo "ITA")
+// ENDPOINT 1: Ricerca su 1337x
 app.get('/cercaTorrentIta', async (req, res) => {
     const searchQuery = req.query.q;
     if (!searchQuery) return res.status(400).json({ success: false, error: "Manca la query" });
 
     try {
-        // Se la ricerca non contiene già "ITA", la aggiungiamo per favorire i risultati in italiano
+        // Aggiungiamo "ITA" se non è già presente per filtrare i contenuti in italiano
         const queryConIta = searchQuery.toLowerCase().includes('ita') ? searchQuery : `${searchQuery} ITA`;
         
-        // URL di ricerca ufficiale di 1337x
-        const trackerUrl = `https://1337xto.to/search/${encodeURIComponent(queryConIta)}/1/`;
+        // Sostituiamo gli spazi con il '+' per evitare errori di formattazione dell'URL (404)
+        const queryFormattata = queryConIta.trim().replace(/\s+/g, '+');
+        
+        const trackerUrl = `${BASE_URL}/search/${queryFormattata}/1/`;
         
         const response = await axios.get(trackerUrl, { headers: browserHeaders });
 
         const $ = cheerio.load(response.data);
         const risultati = [];
 
-        // 1337x organizza i risultati in una tabella con classe "table-list"
         $('table.table-list tbody tr').each((index, element) => {
             const nameCell = $(element).find('td.name');
-            // Su 1337x il secondo link dentro la cella "name" è quello che porta alla pagina dei dettagli
             const linkDettaglio = nameCell.find('a').last();
             let titolo = linkDettaglio.text().trim();
             let detailsUrl = linkDettaglio.attr('href');
 
             if (titolo && detailsUrl) {
-                // Rendi l'URL assoluto
                 if (!detailsUrl.startsWith('http')) {
-                    detailsUrl = `https://1337xto.to${detailsUrl}`;
+                    detailsUrl = `${BASE_URL}${detailsUrl}`;
                 }
 
-                // Estrazione di Seeds e Dimensione specifici della struttura di 1337x
                 const seeds = $(element).find('td.seeds').text().trim() || $(element).find('td.col-2').text().trim() || '0';
-                
                 const sizeEl = $(element).find('td.size').length ? $(element).find('td.size') : $(element).find('td').eq(4);
                 const size = sizeEl.clone().children().remove().end().text().trim() || 'N/D';
 
@@ -62,7 +61,7 @@ app.get('/cercaTorrentIta', async (req, res) => {
     }
 });
 
-// ENDPOINT 2: Estrazione del Magnet Link dalla pagina di dettaglio di 1337x
+// ENDPOINT 2: Estrazione del Magnet Link
 app.get('/getMagnet', async (req, res) => {
     const detailsUrl = req.query.url;
     if (!detailsUrl) return res.status(400).json({ success: false, error: "Manca l'URL" });
@@ -71,7 +70,6 @@ app.get('/getMagnet', async (req, res) => {
         const response = await axios.get(detailsUrl, { headers: browserHeaders });
         const $ = cheerio.load(response.data);
         
-        // Su 1337x il link magnetico si trova all'interno di un tag <a> che inizia con "magnet:"
         const magnet = $('a[href^="magnet:"]').attr('href');
 
         if (magnet) {
