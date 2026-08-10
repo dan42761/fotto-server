@@ -9,21 +9,44 @@ app.use(cors());
 
 let cachedCookies = null;
 
+// Creiamo un'impronta digitale che mimi esattamente Google Chrome su Windows
+const browserHeaders = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+    'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Cache-Control': 'max-age=0',
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1',
+    'Sec-Ch-Ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
+    'Sec-Ch-Ua-Mobile': '?0',
+    'Sec-Ch-Ua-Platform': '"Windows"',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'same-origin',
+    'Sec-Fetch-User': '?1'
+};
+
 async function eseguiLogin() {
     const loginUrl = 'https://ilcorsaroblu.org/index.php?page=login'; 
     const formData = qs.stringify({ uid: 'danyluii', pwd: 'dany42761' });
 
+    // Creiamo gli header specifici per il POST unendoli a quelli del browser
+    const postHeaders = { 
+        ...browserHeaders, 
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Origin': 'https://ilcorsaroblu.org',
+        'Referer': 'https://ilcorsaroblu.org/index.php?page=login'
+    };
+
     const response = await axios.post(loginUrl, formData, {
-        headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        },
+        headers: postHeaders,
         maxRedirects: 0,
         validateStatus: (status) => status >= 200 && status < 400
     });
 
     const setCookieHeaders = response.headers['set-cookie'];
-    if (!setCookieHeaders) throw new Error("Errore login: nessun cookie restituito.");
+    if (!setCookieHeaders) throw new Error("Errore login: nessun cookie restituito dal server.");
 
     cachedCookies = setCookieHeaders.map(cookieString => cookieString.split(';')[0]).join('; ');
     console.log("Login effettuato, cookie aggiornati.");
@@ -39,34 +62,22 @@ app.get('/cercaTorrentIta', async (req, res) => {
         if (!cachedCookies) await eseguiLogin();
 
         const trackerUrl = `https://ilcorsaroblu.org/index.php?page=torrents&search=${encodeURIComponent(searchQuery)}&active=0`;
+        
         let response = await axios.get(trackerUrl, {
-            headers: { 'Cookie': cachedCookies, 'User-Agent': 'Mozilla/5.0' }
+            headers: { ...browserHeaders, 'Cookie': cachedCookies }
         });
 
-        // Se la sessione in memoria è scaduta, rifacciamo il login
         if (response.data.includes('name="pwd"')) {
             await eseguiLogin();
-            response = await axios.get(trackerUrl, { headers: { 'Cookie': cachedCookies, 'User-Agent': 'Mozilla/5.0' } });
+            response = await axios.get(trackerUrl, { headers: { ...browserHeaders, 'Cookie': cachedCookies } });
         }
 
         const $ = cheerio.load(response.data);
         const risultati = [];
 
-        // PASSO 1: Inserisci la classe della tabella.
-        // Se ispezionando hai visto <table class="lista">, scrivi $('table.lista tr').
-        // Se la tabella non ha una classe ma ha un ID (<table id="torrents">), scrivi $('table#torrents tr').
-        // Se non ha nulla, lascia semplicemente $('table tr').
         $('table tr').each((index, element) => {
             const tds = $(element).find('td');
-            
-            // PASSO 2: Quante colonne ha la riga vera e propria del film?
-            // Qui diciamo: "Ignora le righe che hanno meno di 8 colonne" (così saltiamo intestazioni e separatori).
             if (tds.length >= 8) {
-                
-                // PASSO 3: Mappa le colonne giuste!
-                // IMPORTANTE: In programmazione (negli Array), la prima colonna è 0, la seconda è 1, la terza è 2, ecc.
-                
-                // -> Trova il TITOLO (Nella foto era la 2° colonna, quindi indice [1])
                 const linkDettaglio = $(tds[1]).find('a').first();
                 let titolo = linkDettaglio.text().trim();
                 let detailsUrl = linkDettaglio.attr('href');
@@ -76,12 +87,8 @@ app.get('/cercaTorrentIta', async (req, res) => {
                         detailsUrl = `https://ilcorsaroblu.org/${detailsUrl.replace(/^\//, '')}`;
                     }
 
-                    // -> Trova i SEEDS (Nella foto "D" era la 6° colonna, quindi indice [5])
                     const seeds = $(tds[5]).text().trim() || '?'; 
-                    
-                    // -> Trova la DIMENSIONE (Nella foto "Dimensione" era la 10° colonna, quindi indice [9])
                     const size = $(tds[9]).text().trim() || 'N/D';
-
                     risultati.push({ titolo, detailsUrl, size, seeds });
                 }
             }
@@ -90,7 +97,8 @@ app.get('/cercaTorrentIta', async (req, res) => {
         res.json({ success: true, count: risultati.length, data: risultati });
 
     } catch (error) {
-        console.error("Errore Ricerca:", error.message);
+        // Se c'è ancora un errore 403, lo stampiamo per capire in quale punto fallisce
+        console.error("Errore Ricerca:", error.response ? error.response.status : error.message);
         res.status(500).json({ success: false, error: "Errore proxy ricerca" });
     }
 });
@@ -104,12 +112,10 @@ app.get('/getMagnet', async (req, res) => {
         if (!cachedCookies) await eseguiLogin();
         
         const response = await axios.get(detailsUrl, {
-            headers: { 'Cookie': cachedCookies, 'User-Agent': 'Mozilla/5.0' }
+            headers: { ...browserHeaders, 'Cookie': cachedCookies }
         });
 
         const $ = cheerio.load(response.data);
-        
-        // Estrae direttamente l'URL dalla grossa calamita
         const magnet = $('a[href^="magnet:"]').attr('href');
 
         if (magnet) {
@@ -118,7 +124,7 @@ app.get('/getMagnet', async (req, res) => {
             res.json({ success: false, error: "Link magnetico non trovato" });
         }
     } catch (error) {
-        console.error("Errore Magnet:", error.message);
+        console.error("Errore Magnet:", error.response ? error.response.status : error.message);
         res.status(500).json({ success: false, error: "Errore recupero magnet" });
     }
 });
