@@ -1,57 +1,28 @@
 const express = require('express');
 const axios = require('axios');
 const cheerio = require('cheerio');
-const qs = require('qs');
 const cors = require('cors');
 
 const app = express();
 app.use(cors());
 
-let cachedCookies = null;
+// ⚠️ INCOLLA QUI IL TUO COOKIE COMPLETO PRESO DA CHROME
+const MIO_COOKIE = "uid=51848; pass=a2a90a313abb7199768a4750be1fa5f2; ilCorSaRoBlu=6e5cc1274b9bd197beaba89a2ba72bd4; cf_clearance=OvF35no_pleQa.mChz0Zngs1qhN3fQ5g2.k.Z01XPHA-1786383525-1.2.1.1-.YhA6qZsIVSgG_u5Vu8RPBf1YCLUsDwWveN8o3ZP8SyRVDPu7TWJeIY.K9U2.nEAG06R5iWD2HRF4IRuwAI0RigbeaQMJUob5UmbDImqsa1jblj6Hb00k7q9eOHxrw7rxMnU4L04LntiTwsE7V_QfGxK7bK3bewccQKeyS7a_hZZAfMZgy46yYbRSNDflj8YssWxeOdW1HJFuM6RddyDPrAhOab0a02K3n1gs3uwa_RweCxEfzuW7lC.nNlYjuKGIN1d0GCl4qAALyGSGXLbj8C21l_LJzbxfetZbYd97q.QqqcJQzDlzZvA4hwJEeZnUlucFYi4LQKf40GGBAIsVGWhKJ8bP2cswdwDTE4.Tfg";
 
-// Creiamo un'impronta digitale che mimi esattamente Google Chrome su Windows
-const browserHeaders = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+// ⚠️ INCOLLA QUI IL TUO USER-AGENT ESATTO PRESO DA CHROME
+const MIO_USER_AGENT = "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Edg/151.0.0.0 Mobile Safari/537.36";
+
+const headersSicuri = {
+    'Cookie': MIO_COOKIE,
+    'User-Agent': MIO_USER_AGENT,
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
     'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Cache-Control': 'max-age=0',
-    'Connection': 'keep-alive',
     'Upgrade-Insecure-Requests': '1',
-    'Sec-Ch-Ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
-    'Sec-Ch-Ua-Mobile': '?0',
-    'Sec-Ch-Ua-Platform': '"Windows"',
     'Sec-Fetch-Dest': 'document',
     'Sec-Fetch-Mode': 'navigate',
     'Sec-Fetch-Site': 'same-origin',
     'Sec-Fetch-User': '?1'
 };
-
-async function eseguiLogin() {
-    const loginUrl = 'https://ilcorsaroblu.org/index.php?page=login'; 
-    const formData = qs.stringify({ uid: 'danyluii', pwd: 'dany42761' });
-
-    // Creiamo gli header specifici per il POST unendoli a quelli del browser
-    const postHeaders = { 
-        ...browserHeaders, 
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Origin': 'https://ilcorsaroblu.org',
-        'Referer': 'https://ilcorsaroblu.org/index.php?page=login'
-    };
-
-    const response = await axios.post(loginUrl, formData, {
-        headers: postHeaders,
-        maxRedirects: 0,
-        validateStatus: (status) => status >= 200 && status < 400
-    });
-
-    const setCookieHeaders = response.headers['set-cookie'];
-    if (!setCookieHeaders) throw new Error("Errore login: nessun cookie restituito dal server.");
-
-    cachedCookies = setCookieHeaders.map(cookieString => cookieString.split(';')[0]).join('; ');
-    console.log("Login effettuato, cookie aggiornati.");
-    return cachedCookies;
-}
 
 // ENDPOINT 1: Ricerca 
 app.get('/cercaTorrentIta', async (req, res) => {
@@ -59,17 +30,14 @@ app.get('/cercaTorrentIta', async (req, res) => {
     if (!searchQuery) return res.status(400).json({ success: false, error: "Manca la query" });
 
     try {
-        if (!cachedCookies) await eseguiLogin();
-
         const trackerUrl = `https://ilcorsaroblu.org/index.php?page=torrents&search=${encodeURIComponent(searchQuery)}&active=0`;
         
-        let response = await axios.get(trackerUrl, {
-            headers: { ...browserHeaders, 'Cookie': cachedCookies }
-        });
+        const response = await axios.get(trackerUrl, { headers: headersSicuri });
 
+        // Se la pagina contiene il form della password, significa che il cookie è scaduto
         if (response.data.includes('name="pwd"')) {
-            await eseguiLogin();
-            response = await axios.get(trackerUrl, { headers: { ...browserHeaders, 'Cookie': cachedCookies } });
+            console.error("ATTENZIONE: Sessione scaduta o Cookie non validi.");
+            return res.status(401).json({ success: false, error: "Sessione scaduta. Aggiorna i cookie nel server.js" });
         }
 
         const $ = cheerio.load(response.data);
@@ -86,7 +54,6 @@ app.get('/cercaTorrentIta', async (req, res) => {
                     if (!detailsUrl.startsWith('http')) {
                         detailsUrl = `https://ilcorsaroblu.org/${detailsUrl.replace(/^\//, '')}`;
                     }
-
                     const seeds = $(tds[5]).text().trim() || '?'; 
                     const size = $(tds[9]).text().trim() || 'N/D';
                     risultati.push({ titolo, detailsUrl, size, seeds });
@@ -97,24 +64,18 @@ app.get('/cercaTorrentIta', async (req, res) => {
         res.json({ success: true, count: risultati.length, data: risultati });
 
     } catch (error) {
-        // Se c'è ancora un errore 403, lo stampiamo per capire in quale punto fallisce
         console.error("Errore Ricerca:", error.response ? error.response.status : error.message);
-        res.status(500).json({ success: false, error: "Errore proxy ricerca" });
+        res.status(500).json({ success: false, error: "Errore proxy ricerca. Probabile blocco Cloudflare." });
     }
 });
 
-// ENDPOINT 2: Scraping della pagina del magnet link
+// ENDPOINT 2: Scraping del Magnet
 app.get('/getMagnet', async (req, res) => {
     const detailsUrl = req.query.url;
     if (!detailsUrl) return res.status(400).json({ success: false, error: "Manca l'URL" });
 
     try {
-        if (!cachedCookies) await eseguiLogin();
-        
-        const response = await axios.get(detailsUrl, {
-            headers: { ...browserHeaders, 'Cookie': cachedCookies }
-        });
-
+        const response = await axios.get(detailsUrl, { headers: headersSicuri });
         const $ = cheerio.load(response.data);
         const magnet = $('a[href^="magnet:"]').attr('href');
 
@@ -130,4 +91,4 @@ app.get('/getMagnet', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server proxy in esecuzione sulla porta ${PORT}`));
+app.listen(PORT, () => console.log(`Server in esecuzione sulla porta ${PORT}`));
