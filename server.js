@@ -52,28 +52,34 @@ app.get('/cercaTorrentIta', async (req, res) => {
         const $ = cheerio.load(response.data);
         const risultati = [];
 
-        // ⚠️ NUOVO ALGORITMO DI SCRAPING DINAMICO
-        // Scansioniamo ogni singola riga presente in tutte le tabelle
-        $('tr').each((index, element) => {
+        // PASSO 1: Inserisci la classe della tabella.
+        // Se ispezionando hai visto <table class="lista">, scrivi $('table.lista tr').
+        // Se la tabella non ha una classe ma ha un ID (<table id="torrents">), scrivi $('table#torrents tr').
+        // Se non ha nulla, lascia semplicemente $('table tr').
+        $('table tr').each((index, element) => {
             const tds = $(element).find('td');
             
-            // Guardando la tua immagine, i veri file hanno 11 colonne. 
-            // Ignoriamo i separatori delle date e le barre di ricerca che hanno poche colonne.
+            // PASSO 2: Quante colonne ha la riga vera e propria del film?
+            // Qui diciamo: "Ignora le righe che hanno meno di 8 colonne" (così saltiamo intestazioni e separatori).
             if (tds.length >= 8) {
                 
-                // La colonna 1 (la seconda da sinistra) è "Nome". Cerchiamo il link al suo interno.
+                // PASSO 3: Mappa le colonne giuste!
+                // IMPORTANTE: In programmazione (negli Array), la prima colonna è 0, la seconda è 1, la terza è 2, ecc.
+                
+                // -> Trova il TITOLO (Nella foto era la 2° colonna, quindi indice [1])
                 const linkDettaglio = $(tds[1]).find('a').first();
                 let titolo = linkDettaglio.text().trim();
                 let detailsUrl = linkDettaglio.attr('href');
 
                 if (titolo && detailsUrl) {
-                    // Rendiamo l'URL della pagina dettagli un link assoluto
                     if (!detailsUrl.startsWith('http')) {
                         detailsUrl = `https://ilcorsaroblu.org/${detailsUrl.replace(/^\//, '')}`;
                     }
 
-                    // Preleviamo Seeds (Colonna 5 'D') e Size (Colonna 9 'Dimensione')
+                    // -> Trova i SEEDS (Nella foto "D" era la 6° colonna, quindi indice [5])
                     const seeds = $(tds[5]).text().trim() || '?'; 
+                    
+                    // -> Trova la DIMENSIONE (Nella foto "Dimensione" era la 10° colonna, quindi indice [9])
                     const size = $(tds[9]).text().trim() || 'N/D';
 
                     risultati.push({ titolo, detailsUrl, size, seeds });
