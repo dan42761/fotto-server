@@ -5,19 +5,13 @@ const qs = require('qs');
 const cors = require('cors');
 
 const app = express();
-
-// Abilita il CORS per permettere al tuo sito su Firebase di contattare questo server
 app.use(cors());
 
-// Variabile globale per salvare la sessione
 let cachedCookies = null;
 
 async function eseguiLogin() {
     const loginUrl = 'https://ilcorsaroblu.org/index.php?page=login'; 
-    const formData = qs.stringify({
-        uid: 'danyluii',
-        pwd: 'dany42761'
-    });
+    const formData = qs.stringify({ uid: 'danyluii', pwd: 'dany42761' });
 
     const response = await axios.post(loginUrl, formData, {
         headers: {
@@ -36,54 +30,84 @@ async function eseguiLogin() {
     return cachedCookies;
 }
 
-// Endpoint principale
+// ENDPOINT 1: Ricerca e recupero lista risultati (Titoli e URL dei Dettagli)
 app.get('/cercaTorrentIta', async (req, res) => {
     const searchQuery = req.query.q;
-    if (!searchQuery) {
-        return res.status(400).json({ success: false, error: "Manca la query" });
-    }
+    if (!searchQuery) return res.status(400).json({ success: false, error: "Manca la query" });
 
     try {
         if (!cachedCookies) await eseguiLogin();
 
         const trackerUrl = `https://ilcorsaroblu.org/index.php?page=torrents&search=${encodeURIComponent(searchQuery)}`;
         let response = await axios.get(trackerUrl, {
-            headers: {
-                'Cookie': cachedCookies,
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-            }
+            headers: { 'Cookie': cachedCookies, 'User-Agent': 'Mozilla/5.0' }
         });
 
         if (response.data.includes('name="pwd"')) {
             await eseguiLogin();
-            response = await axios.get(trackerUrl, {
-                headers: { 'Cookie': cachedCookies, 'User-Agent': 'Mozilla/5.0' }
-            });
+            response = await axios.get(trackerUrl, { headers: { 'Cookie': cachedCookies, 'User-Agent': 'Mozilla/5.0' } });
         }
 
         const $ = cheerio.load(response.data);
         const risultati = [];
 
+        // Analizziamo la tabella mostrata nella tua prima immagine
         $('table tr').each((index, element) => {
-            const magnet = $(element).find('a[href^="magnet:"]').attr('href');
-            if (magnet) {
-                const titolo = $(element).find('td.titolo, td.name, td:nth-child(2)').text().trim() || 'Titolo sconosciuto';
-                const size = $(element).find('td.size, td:nth-child(3)').text().trim() || 'N/D';
-                const seeds = $(element).find('td.seeds, td:nth-child(4)').text().trim() || '0';
-                risultati.push({ titolo, magnet, size, seeds });
+            if (index === 0) return; // Salta l'intestazione della tabella
+
+            // La colonna 'Nome' è la seconda (indice 1). Cerchiamo il link <a> al suo interno.
+            const nameLink = $(element).find('td').eq(1).find('a').first();
+            const titolo = nameLink.text().trim();
+            let detailsUrl = nameLink.attr('href');
+
+            if (titolo && detailsUrl) {
+                // Assicuriamoci che l'URL sia assoluto
+                if (!detailsUrl.startsWith('http')) {
+                    detailsUrl = `https://ilcorsaroblu.org/${detailsUrl.replace(/^\//, '')}`;
+                }
+                
+                // In base alla tua immagine, cerchiamo di estrarre i dati dalle altre colonne
+                const seeds = $(element).find('td').eq(6).text().trim() || '?'; // Colonna R (Seeds)
+                const size = $(element).find('td').eq(9).text().trim() || 'N/D'; // Colonna Dimensione
+
+                risultati.push({ titolo, detailsUrl, size, seeds });
             }
         });
 
         res.json({ success: true, count: risultati.length, data: risultati });
 
     } catch (error) {
-        console.error("Errore:", error.message);
-        res.status(500).json({ success: false, error: "Errore proxy" });
+        console.error("Errore Ricerca:", error.message);
+        res.status(500).json({ success: false, error: "Errore proxy ricerca" });
     }
 });
 
-// Avvia il server sulla porta assegnata dalla piattaforma o sulla 3000 in locale
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Server proxy in esecuzione sulla porta ${PORT}`);
+// ENDPOINT 2: Scraping della pagina di dettaglio (mostrata nella seconda immagine)
+app.get('/getMagnet', async (req, res) => {
+    const detailsUrl = req.query.url;
+    if (!detailsUrl) return res.status(400).json({ success: false, error: "Manca l'URL" });
+
+    try {
+        if (!cachedCookies) await eseguiLogin();
+        
+        const response = await axios.get(detailsUrl, {
+            headers: { 'Cookie': cachedCookies, 'User-Agent': 'Mozilla/5.0' }
+        });
+
+        const $ = cheerio.load(response.data);
+        // Cerca il link che inizia con magnet: (il bottone con la calamita)
+        const magnet = $('a[href^="magnet:"]').attr('href');
+
+        if (magnet) {
+            res.json({ success: true, magnet });
+        } else {
+            res.json({ success: false, error: "Link magnetico non trovato" });
+        }
+    } catch (error) {
+        console.error("Errore Magnet:", error.message);
+        res.status(500).json({ success: false, error: "Errore recupero magnet" });
+    }
 });
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server proxy in esecuzione sulla porta ${PORT}`));
