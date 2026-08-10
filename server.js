@@ -6,89 +6,84 @@ const cors = require('cors');
 const app = express();
 app.use(cors());
 
-// ⚠️ INCOLLA QUI IL TUO COOKIE COMPLETO PRESO DA CHROME
-const MIO_COOKIE = "uid=51848; pass=a2a90a313abb7199768a4750be1fa5f2; ilCorSaRoBlu=6e5cc1274b9bd197beaba89a2ba72bd4; cf_clearance=OvF35no_pleQa.mChz0Zngs1qhN3fQ5g2.k.Z01XPHA-1786383525-1.2.1.1-.YhA6qZsIVSgG_u5Vu8RPBf1YCLUsDwWveN8o3ZP8SyRVDPu7TWJeIY.K9U2.nEAG06R5iWD2HRF4IRuwAI0RigbeaQMJUob5UmbDImqsa1jblj6Hb00k7q9eOHxrw7rxMnU4L04LntiTwsE7V_QfGxK7bK3bewccQKeyS7a_hZZAfMZgy46yYbRSNDflj8YssWxeOdW1HJFuM6RddyDPrAhOab0a02K3n1gs3uwa_RweCxEfzuW7lC.nNlYjuKGIN1d0GCl4qAALyGSGXLbj8C21l_LJzbxfetZbYd97q.QqqcJQzDlzZvA4hwJEeZnUlucFYi4LQKf40GGBAIsVGWhKJ8bP2cswdwDTE4.Tfg";
-
-// ⚠️ INCOLLA QUI IL TUO USER-AGENT ESATTO PRESO DA CHROME
-const MIO_USER_AGENT = "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Edg/151.0.0.0 Mobile Safari/537.36";
-
-const headersSicuri = {
-    'Cookie': MIO_COOKIE,
-    'User-Agent': MIO_USER_AGENT,
+// Headers standard per simulare un browser reale ed evitare blocchi preliminari
+const browserHeaders = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-    'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7',
-    'Upgrade-Insecure-Requests': '1',
-    'Sec-Fetch-Dest': 'document',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'same-origin',
-    'Sec-Fetch-User': '?1'
+    'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7'
 };
 
-// ENDPOINT 1: Ricerca 
+// ENDPOINT 1: Ricerca su 1337x (forzata in italiano aggiungendo "ITA")
 app.get('/cercaTorrentIta', async (req, res) => {
     const searchQuery = req.query.q;
     if (!searchQuery) return res.status(400).json({ success: false, error: "Manca la query" });
 
     try {
-        const trackerUrl = `https://ilcorsaroblu.org/index.php?page=torrents&search=${encodeURIComponent(searchQuery)}&active=0`;
+        // Se la ricerca non contiene già "ITA", la aggiungiamo per favorire i risultati in italiano
+        const queryConIta = searchQuery.toLowerCase().includes('ita') ? searchQuery : `${searchQuery} ITA`;
         
-        const response = await axios.get(trackerUrl, { headers: headersSicuri });
-
-        // Se la pagina contiene il form della password, significa che il cookie è scaduto
-        if (response.data.includes('name="pwd"')) {
-            console.error("ATTENZIONE: Sessione scaduta o Cookie non validi.");
-            return res.status(401).json({ success: false, error: "Sessione scaduta. Aggiorna i cookie nel server.js" });
-        }
+        // URL di ricerca ufficiale di 1337x
+        const trackerUrl = `https://1337xto.to/search/${encodeURIComponent(queryConIta)}/1/`;
+        
+        const response = await axios.get(trackerUrl, { headers: browserHeaders });
 
         const $ = cheerio.load(response.data);
         const risultati = [];
 
-        $('table tr').each((index, element) => {
-            const tds = $(element).find('td');
-            if (tds.length >= 8) {
-                const linkDettaglio = $(tds[1]).find('a').first();
-                let titolo = linkDettaglio.text().trim();
-                let detailsUrl = linkDettaglio.attr('href');
+        // 1337x organizza i risultati in una tabella con classe "table-list"
+        $('table.table-list tbody tr').each((index, element) => {
+            const nameCell = $(element).find('td.name');
+            // Su 1337x il secondo link dentro la cella "name" è quello che porta alla pagina dei dettagli
+            const linkDettaglio = nameCell.find('a').last();
+            let titolo = linkDettaglio.text().trim();
+            let detailsUrl = linkDettaglio.attr('href');
 
-                if (titolo && detailsUrl) {
-                    if (!detailsUrl.startsWith('http')) {
-                        detailsUrl = `https://ilcorsaroblu.org/${detailsUrl.replace(/^\//, '')}`;
-                    }
-                    const seeds = $(tds[5]).text().trim() || '?'; 
-                    const size = $(tds[9]).text().trim() || 'N/D';
-                    risultati.push({ titolo, detailsUrl, size, seeds });
+            if (titolo && detailsUrl) {
+                // Rendi l'URL assoluto
+                if (!detailsUrl.startsWith('http')) {
+                    detailsUrl = `https://1337xto.to${detailsUrl}`;
                 }
+
+                // Estrazione di Seeds e Dimensione specifici della struttura di 1337x
+                const seeds = $(element).find('td.seeds').text().trim() || $(element).find('td.col-2').text().trim() || '0';
+                
+                const sizeEl = $(element).find('td.size').length ? $(element).find('td.size') : $(element).find('td').eq(4);
+                const size = sizeEl.clone().children().remove().end().text().trim() || 'N/D';
+
+                risultati.push({ titolo, detailsUrl, size, seeds });
             }
         });
 
         res.json({ success: true, count: risultati.length, data: risultati });
 
     } catch (error) {
-        console.error("Errore Ricerca:", error.response ? error.response.status : error.message);
-        res.status(500).json({ success: false, error: "Errore proxy ricerca. Probabile blocco Cloudflare." });
+        console.error("Errore Ricerca 1337x:", error.message);
+        res.status(500).json({ success: false, error: "Errore proxy ricerca 1337x" });
     }
 });
 
-// ENDPOINT 2: Scraping del Magnet
+// ENDPOINT 2: Estrazione del Magnet Link dalla pagina di dettaglio di 1337x
 app.get('/getMagnet', async (req, res) => {
     const detailsUrl = req.query.url;
     if (!detailsUrl) return res.status(400).json({ success: false, error: "Manca l'URL" });
 
     try {
-        const response = await axios.get(detailsUrl, { headers: headersSicuri });
+        const response = await axios.get(detailsUrl, { headers: browserHeaders });
         const $ = cheerio.load(response.data);
+        
+        // Su 1337x il link magnetico si trova all'interno di un tag <a> che inizia con "magnet:"
         const magnet = $('a[href^="magnet:"]').attr('href');
 
         if (magnet) {
             res.json({ success: true, magnet });
         } else {
-            res.json({ success: false, error: "Link magnetico non trovato" });
+            res.json({ success: false, error: "Link magnetico non trovato nella pagina" });
         }
     } catch (error) {
-        console.error("Errore Magnet:", error.response ? error.response.status : error.message);
+        console.error("Errore Magnet 1337x:", error.message);
         res.status(500).json({ success: false, error: "Errore recupero magnet" });
     }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server in esecuzione sulla porta ${PORT}`));
+app.listen(PORT, () => console.log(`Server proxy 1337x in esecuzione sulla porta ${PORT}`));
